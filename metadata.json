@@ -1,5 +1,6 @@
 {
   "name": "Remix: AlumniPath: Career Trajectory Tracker",
   "description": "A comprehensive platform to track and analyze the career trajectories of alumni over the last 20 batches, featuring real-time insights and trend analysis powered by Gemini AI.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

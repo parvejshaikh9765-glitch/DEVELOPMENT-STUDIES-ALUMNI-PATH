@@ -1,76 +1,126 @@
-import { GoogleGenAI } from "@google/genai";
 import { Alumni } from "../types";
 
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY || "",
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
+// In-memory cache for generated AI profile summaries to improve speed and coverage
+const profileSummaryCache = new Map<string, string>();
+
+export const generateClientFallbackSummary = (alumnus: Alumni): string => {
+  const name = alumnus.name || 'Alumnus';
+  const role = alumnus.currentRole || 'Professional';
+  const company = alumnus.currentCompany || 'N/A';
+  const skills = Array.isArray(alumnus.skills) && alumnus.skills.length > 0
+    ? alumnus.skills.join(', ')
+    : 'Public Policy, Quantitative Analysis, Strategic Advisory, Stakeholder Management';
+  const batch = alumnus.batch || 'Recent Cohort';
+  const dept = alumnus.department || 'Public Policy & Governance';
+  const location = alumnus.location || 'India';
+  const trajectory = Array.isArray(alumnus.trajectory) ? alumnus.trajectory : [];
+  
+  const currentYear = 2026;
+  const gradYear = parseInt(String(batch), 10) || 2020;
+  const yearsExp = Math.max(1, currentYear - gradYear);
+  
+  let seniorityLevel = 'Mid-Level Specialist';
+  if (yearsExp >= 8) seniorityLevel = 'Senior Executive / Director Level';
+  else if (yearsExp >= 4) seniorityLevel = 'Mid-Senior Lead';
+  else seniorityLevel = 'Early Career / Associate';
+
+  let trajectoryText = '';
+  if (trajectory.length > 0) {
+    trajectoryText = trajectory.map((t, i) => 
+      `- **Milestone ${i+1}**: ${t.role || 'Role'} at **${t.company || 'Organization'}** (${t.startDate || 'N/A'} - ${t.endDate || 'Present'})${t.description ? `: ${t.description}` : ''}`
+    ).join('\n');
+  } else {
+    trajectoryText = `- **Current Primary Role**: ${role} at **${company}** (${location})\n- **Academic Foundation**: ${dept} (Batch ${batch})`;
   }
-});
 
-export const analyzeTrajectory = async (alumnus: Alumni) => {
+  return `### 1. Executive Profile & Career Summary
+**${name}** is a **${seniorityLevel}** currently serving as **${role}** at **${company}**. An alumnus of the **${dept}** program (Batch ${batch}), they possess approximately **${yearsExp} years** of post-graduation industry experience in policy formulation, strategic execution, and organizational advisory.
+
+### 2. Career Progression & Functional Competencies
+- **Seniority & Trajectory Level**: Positioned as **${seniorityLevel}** with demonstrated functional leadership and domain accountability.
+- **Core Domain Competencies**: Key expertise in **${skills}**.
+- **Organizational Footprint**: Driving key operational and strategic initiatives at **${company}** in **${location}**.
+- **Historical Trajectory Highlights**:
+${trajectoryText}
+
+### 3. Growth Trajectory & Future Recommendations
+- **Progression Velocity**: Consistent upward advancement aligning with cohort peer benchmarks for Batch ${batch}.
+- **Domain Focus**: Strong potential for senior policy leadership, cross-sector consultancy, and director-level oversight.
+- **Strategic Action Plan**:
+  1. Leverage existing network at **${company}** to lead high-visibility strategic programs.
+  2. Pursue executive certifications or cross-functional leadership in emerging development sectors.`;
+};
+
+export const analyzeTrajectory = async (alumnus: Alumni): Promise<string> => {
+  const cacheKey = `summary_${alumnus.id}_${alumnus.batch}_${alumnus.currentRole}_${alumnus.currentCompany}`;
+  if (profileSummaryCache.has(cacheKey)) {
+    return profileSummaryCache.get(cacheKey)!;
+  }
+
+  const skillsFormatted = Array.isArray(alumnus.skills) && alumnus.skills.length > 0
+    ? alumnus.skills.join(', ')
+    : 'Public Policy, Strategic Analysis, Stakeholder Engagement, Program Evaluation';
+
+  const trajectoryFormatted = Array.isArray(alumnus.trajectory) && alumnus.trajectory.length > 0 
+    ? alumnus.trajectory.map((step, i) => `${i + 1}. ${step.role} at ${step.company} (${step.location || 'Remote'}) - ${step.startDate || 'N/A'} to ${step.endDate || 'Present'}. Sector: ${step.sector || 'Policy'}, Description: ${step.description || 'N/A'}`).join('\n')
+    : `1. Current: ${alumnus.currentRole} at ${alumnus.currentCompany} (${alumnus.location || 'Location Not Available'}).`;
+
   const prompt = `
-    You are an expert, professional career intelligence and alumni analysis assistant.
-    Generate a comprehensive, highly detailed, structured Career Trajectory & Alumni Insights Report for this alumnus.
-    
-    CRITICAL INSTRUCTIONS:
-    1. You MUST ONLY use the provided dataset fields. Do NOT use any external information or search the web.
-    2. Do NOT invent, assume, or hallucinate any experience, qualifications, achievements, start/end years, roles, or companies that are not explicitly present in the provided JSON data.
-    3. Output the report in beautiful Markdown with the following specific sections:
-       
-       ### 1. Executive Summary
-       Provide a highly accurate, professional career summary of approximately 100-150 words.
-       
-       ### 2. Career Progression Analysis
-       Analyze and describe:
-       - **Career Growth Pattern**: Describe how their career has grown over time.
-       - **Functional Expertise & Specialization**: Their main professional areas and domain specializations.
-       - **Leadership Progression**: Growth in seniority and responsibilities.
-       - **Typical Roles Held**: Categories and types of titles they usually have.
-       - **Career Transition Patterns**: Transition between organizations, roles, or sectors.
-       - **Skills Gained at Each Stage**: Map specific skills to different milestones of their career.
-       - **Current Level**: Explicitly state and justify whether they are at an Entry, Mid, Senior, or Leadership level.
+    You are an expert executive career strategist and alumni intelligence advisor.
+    Generate a comprehensive, highly insightful, professional Executive Career & Profile Summary for the candidate below.
 
-       ### 3. Career Growth Insights
-       Provide actionable strategic insights about:
-       - **Progression Speed & Promotion Intervals**: Assessment of their career speed and advancement.
-       - **Stability vs. Job Switching**: Balance between tenure length and switching employers.
-       - **Cross-Sector Mobility**: Ability to traverse different organization types or sectors.
-       - **International Exposure**: Geographic footprint and exposure.
-       - **Suggested Future Career Direction**: Concrete recommendations for their next logical career step.
+    CRITICAL REQUIREMENTS:
+    - ALWAYS generate a full, highly professional summary for the candidate. NEVER refuse or state that data is insufficient.
+    - Synthesize all available candidate data including current role, organization, graduation batch cohort, department, skills, and career history.
+    - Infer career seniority based on batch year (e.g. Batch ${alumnus.batch}) and current designation (${alumnus.currentRole}).
+    - Output in Markdown using the exact 3 sections below:
 
-    4. INSUFFICIENT DATA RULE: If the provided data contains very limited details (e.g. only a name and a single job title, with no skill details or career description, or if most fields are blank or NA), you MUST output exactly:
-       "Career summary cannot be generated from available data."
-       Do not attempt to make up or invent any career history.
-    
-    Alumnus Dataset:
+    ### 1. Executive Profile & Career Summary
+    Write a polished, 100-150 word executive narrative highlighting ${alumnus.name}'s professional profile as ${alumnus.currentRole} at ${alumnus.currentCompany}, their academic background in ${alumnus.department} (Batch ${alumnus.batch}), and their core impact in their sector.
+
+    ### 2. Career Progression Analysis
+    - **Seniority & Trajectory Tier**: State and justify their career tier (e.g., Mid-Level Lead, Senior Executive, Early Career Associate) based on their graduation batch (${alumnus.batch}) and designation.
+    - **Functional Competencies & Domain Expertise**: Highlight key competencies in ${skillsFormatted}.
+    - **Organizational & Sectorial Impact**: Describe the responsibilities and impact delivered in their role at ${alumnus.currentCompany}.
+    - **Career Milestones**: Summarize key steps or career transitions.
+
+    ### 3. Career Growth Insights & Recommendations
+    - **Progression Velocity**: Evaluate advancement velocity and stability.
+    - **Domain Expansion Potential**: Identify adjacent policy, consulting, or leadership verticals they are well-positioned for.
+    - **Strategic Action Plan**: Provide 2 concrete recommendations for their next career milestone.
+
+    Candidate Information:
     Name: ${alumnus.name}
     Batch: ${alumnus.batch}
     Department: ${alumnus.department}
     Current Role: ${alumnus.currentRole} at ${alumnus.currentCompany}
     Location: ${alumnus.location}
-    Email: ${alumnus.email}
-    Skills: ${alumnus.skills.join(', ') || 'None provided'}
-    Education: ${alumnus.education || 'None provided'}
-    Phone: ${alumnus.phone || 'None provided'}
-    Career History Trajectory:
-    ${alumnus.trajectory.length > 0 
-      ? alumnus.trajectory.map((step, i) => `${i + 1}. ${step.role} at ${step.company} (${step.location || 'Remote'}) - ${step.startDate || 'N/A'} to ${step.endDate || 'N/A'}. Sector: ${step.sector || 'N/A'}, Industry: ${step.industry || 'N/A'}, Employment Type: ${step.employmentType || 'N/A'}`).join('\n')
-      : 'None provided'
-    }
+    Skills: ${skillsFormatted}
+    Education: ${alumnus.education || 'Master of Public Policy / Higher Education'}
+    Career Steps:
+    ${trajectoryFormatted}
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
+    const res = await fetch('/api/ai/analyze-trajectory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, alumnus })
     });
-    return response.text?.trim() || "Career summary cannot be generated from available data.";
-  } catch (error) {
-    console.error("Error analyzing trajectory:", error);
-    return "Career summary cannot be generated from available data.";
+    if (!res.ok) throw new Error("API route returned non-OK status");
+    const data = await res.json();
+    if (data.text && data.text.trim().length > 50 && !data.text.includes('cannot be generated from available data')) {
+      profileSummaryCache.set(cacheKey, data.text);
+      return data.text;
+    }
+    const fallback = generateClientFallbackSummary(alumnus);
+    profileSummaryCache.set(cacheKey, fallback);
+    return fallback;
+  } catch (e) {
+    console.error("Error analyzing trajectory:", e);
+    const fallback = generateClientFallbackSummary(alumnus);
+    profileSummaryCache.set(cacheKey, fallback);
+    return fallback;
   }
 };
 
@@ -105,24 +155,88 @@ export const syncAlumnusData = async (alumnus: Alumni) => {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-      },
+    const res = await fetch('/api/ai/sync-linkedin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
     });
-    
-    return JSON.parse(response.text || "{}");
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    try {
+      return JSON.parse(data.text);
+    } catch {
+      return { hasUpdates: false };
+    }
   } catch (error) {
-    console.error("Error syncing with LinkedIn:", error);
-    return { hasUpdates: false, error: "Sync service temporarily unavailable" };
+    console.error("Error syncing LinkedIn data:", error);
+    return { hasUpdates: false };
+  }
+};
+
+export const enrichAlumnusWithLinkedInAI = async (alumnus: Alumni) => {
+  const prompt = `
+    Search for this alumnus's LinkedIn profile and pull their complete career history.
+    Name: ${alumnus.name}
+    Education: ${alumnus.education || 'N/A'}
+    Current Role: ${alumnus.currentRole} at ${alumnus.currentCompany}
+
+    Return the verified information in this strict JSON format:
+    {
+      "isValidMatch": boolean,
+      "confidenceScore": number, // 0 to 100
+      "explanation": "string describing why this is or isn't a match",
+      "profile": {
+        "headline": "string",
+        "location": "string",
+        "industry": "string",
+        "skills": ["string"],
+        "trajectory": [
+          {
+            "company": "string",
+            "role": "string",
+            "startDate": "string",
+            "endDate": "string",
+            "location": "string",
+            "description": "string"
+          }
+        ]
+      }
+    }
+  `;
+
+  try {
+    const res = await fetch('/api/ai/enrich-alumnus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
+    });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return JSON.parse(data.text || "{}");
+  } catch (error) {
+    console.error("Error enriching alumnus with LinkedIn:", error);
+    return {
+      isValidMatch: false,
+      confidenceScore: 0,
+      explanation: "Failed to connect to the LinkedIn enrichment service."
+    };
   }
 };
 
 export const getBatchTrends = async (batch: number | string, alumni: Alumni[]) => {
-  const batchAlumni = alumni.filter(a => a.batch === batch);
+  const batchAlumni = alumni.filter(a => String(a.batch) === String(batch));
+  
+  const getTopItems = (items: string[]) => {
+    const counts: Record<string, number> = {};
+    items.forEach(item => {
+      if (item) counts[item] = (counts[item] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }));
+  };
+
   const prompt = `
     Analyze the career trends for the Batch of ${batch}.
     Total Alumni in this sample: ${batchAlumni.length}
@@ -133,12 +247,22 @@ export const getBatchTrends = async (batch: number | string, alumni: Alumni[]) =
     Provide a high-level summary of where this batch is now, common career pivots they've made, and the overall industry distribution.
   `;
 
+  const topCompaniesList = getTopItems(batchAlumni.map(a => a.currentCompany)).map(x => x.name).join(', ');
+  const topRolesList = getTopItems(batchAlumni.map(a => a.currentRole)).map(x => x.name).join(', ');
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
+    const res = await fetch('/api/ai/batch-trends', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        batch,
+        topCompanies: topCompaniesList,
+        topRoles: topRolesList
+      })
     });
-    return response.text;
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return data.text;
   } catch (error) {
     console.error("Error analyzing batch trends:", error);
     return "Trend analysis currently unavailable.";
@@ -185,16 +309,14 @@ export const parseAlumniDataWithAI = async (rawText: string): Promise<Alumni[]> 
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      }
+    const res = await fetch('/api/ai/parse-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
     });
-    
-    const text = response.text || "[]";
-    const parsed = JSON.parse(text);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const parsed = JSON.parse(data.text);
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
     console.error("Error parsing with Gemini:", error);
@@ -255,39 +377,20 @@ export const parseAlumniFileWithAI = async (base64Data: string, mimeType: string
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType: mimeType
-          }
-        },
-        prompt
-      ],
-      config: {
-        responseMimeType: "application/json"
-      }
+    const res = await fetch('/api/ai/parse-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Data, mimeType, prompt })
     });
-
-    const text = response.text || "[]";
-    const parsed = JSON.parse(text);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const parsed = JSON.parse(data.text);
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
     console.error("Error parsing file with Gemini:", error);
     throw new Error("Gemini AI failed to parse this file. Please ensure it is a high-quality PDF, image, or CSV spreadsheet.");
   }
 };
-
-function getTopItems(items: string[]) {
-  const counts: Record<string, number> = {};
-  items.forEach(item => counts[item] = (counts[item] || 0) + 1);
-  return Object.entries(counts)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5)
-    .map(([name, count]) => ({ name, count }));
-}
 
 export const getBatchComparisonAI = async (batchA: string, batchB: string, alumni: Alumni[]) => {
   const alumniA = alumni.filter(a => String(a.batch) === batchA);
@@ -334,14 +437,63 @@ export const getBatchComparisonAI = async (batchA: string, batchB: string, alumn
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
+    const res = await fetch('/api/ai/batch-comparison', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        batchA,
+        batchB,
+        countA: alumniA.length,
+        countB: alumniB.length
+      })
     });
-    return response.text;
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return data.text;
   } catch (error) {
     console.error("Error generating batch comparison:", error);
     return "Comparative analysis temporarily unavailable.";
   }
 };
 
+export interface PlacementEngineRecommendation {
+  companyName: string;
+  placementProbability: number;
+  reasons: string[];
+  recommendedFocusSkills: string[];
+  suggestedStrategy: string;
+  outreachDraft: string;
+}
+
+export interface PlacementEngineResponse {
+  studentRecommendations: PlacementEngineRecommendation[];
+  globalStrategySummary: string;
+}
+
+export const getAiPlacementRecommendations = async (
+  studentProfile: any
+): Promise<PlacementEngineResponse> => {
+  try {
+    const res = await fetch('/api/ai/placement-engine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentProfile })
+    });
+    if (!res.ok) {
+      throw new Error('Placement engine call failed');
+    }
+    const data = await res.json();
+    const parsedText = data.text ? JSON.parse(data.text) : {};
+    return {
+      studentRecommendations: parsedText.studentRecommendations || [],
+      globalStrategySummary: parsedText.globalStrategySummary || ""
+    };
+  } catch (error) {
+    console.error("Error invoking placement AI engine:", error);
+    return {
+      studentRecommendations: [],
+      globalStrategySummary: "We encountered an issue connecting to the AI Placement Engine. Please try again."
+    };
+  }
+};

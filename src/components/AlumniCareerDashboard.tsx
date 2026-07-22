@@ -19,7 +19,9 @@ import {
   BriefcaseIcon,
   Shield,
   Layers,
-  ArrowRight
+  ArrowRight,
+  AlertCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -36,7 +38,7 @@ import {
   Area
 } from 'recharts';
 import { Alumni, CareerStep } from '../types';
-import { enrichTrajectory, getCareerStatistics, getExperienceLevel } from '../utils/careerUtils';
+import { enrichTrajectory, getCareerStatistics, getExperienceLevel, analyzeTrajectoryQuality } from '../utils/careerUtils';
 
 interface AlumniCareerDashboardProps {
   alumnus: Alumni;
@@ -46,6 +48,15 @@ interface AlumniCareerDashboardProps {
 
 export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }: AlumniCareerDashboardProps) {
   const [activeSubTab, setActiveSubTab] = useState<'timeline' | 'stats' | 'sectors' | 'geography'>('timeline');
+
+  // Get data quality warnings
+  const qualityWarnings = useMemo(() => {
+    return analyzeTrajectoryQuality(alumnus);
+  }, [alumnus]);
+
+  const criticalIssues = useMemo(() => {
+    return qualityWarnings.filter(w => w.type === 'error' || w.type === 'warning');
+  }, [qualityWarnings]);
 
   // 1. Get enriched career data
   const enrichedSteps = useMemo(() => {
@@ -225,10 +236,10 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
   return (
     <div className="space-y-10" id="alumni-career-intelligence-dashboard">
       {/* Visual Sub Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-200/80 pb-3" id="career-intelligence-tabs">
+      <div className="flex items-center gap-1.5 border-b border-zinc-200/80 pb-3 overflow-x-auto max-w-full scrollbar-none snap-x" id="career-intelligence-tabs">
         <button
           onClick={() => setActiveSubTab('timeline')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer snap-start shrink-0 whitespace-nowrap ${
             activeSubTab === 'timeline'
               ? 'bg-zinc-900 text-white shadow-sm'
               : 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100'
@@ -239,7 +250,7 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
         </button>
         <button
           onClick={() => setActiveSubTab('stats')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer snap-start shrink-0 whitespace-nowrap ${
             activeSubTab === 'stats'
               ? 'bg-zinc-900 text-white shadow-sm'
               : 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100'
@@ -250,7 +261,7 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
         </button>
         <button
           onClick={() => setActiveSubTab('sectors')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer snap-start shrink-0 whitespace-nowrap ${
             activeSubTab === 'sectors'
               ? 'bg-zinc-900 text-white shadow-sm'
               : 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100'
@@ -261,7 +272,7 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
         </button>
         <button
           onClick={() => setActiveSubTab('geography')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer snap-start shrink-0 whitespace-nowrap ${
             activeSubTab === 'geography'
               ? 'bg-zinc-900 text-white shadow-sm'
               : 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100'
@@ -275,6 +286,70 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
       {/* Subtab Contents */}
       {activeSubTab === 'timeline' && (
         <div className="space-y-10 animate-fadeIn" id="content-timeline-section">
+          
+          {/* Data Quality & Trajectory Reconciliation Intelligence Hub */}
+          <div className="bg-zinc-55 border border-zinc-200/80 rounded-2xl p-5 space-y-4 shadow-sm" id="trajectory-reconciliation-hub">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 bg-amber-50 border border-amber-200 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
+                  <Shield className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-zinc-950 uppercase tracking-wider">Trajectory Integrity & Reconciliation Hub</h4>
+                  <p className="text-[10px] font-medium text-zinc-400">Scanned and cross-referenced from spreadsheet sources and timelines</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-1.5 self-start sm:self-center">
+                {criticalIssues.length > 0 ? (
+                  <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-full px-2.5 py-1 uppercase tracking-wider flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-amber-500 animate-pulse" /> {criticalIssues.length} Quality Alerts
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-2.5 py-1 uppercase tracking-wider flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Perfect Integrity
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Inconsistency cards list */}
+            {qualityWarnings.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {qualityWarnings.map((w, wIdx) => {
+                  const typeStyles = {
+                    error: 'border-red-100 bg-red-50/30 text-red-900',
+                    warning: 'border-amber-200 bg-amber-50/20 text-amber-900',
+                    info: 'border-indigo-100 bg-indigo-50/25 text-indigo-900',
+                    success: 'border-emerald-150 bg-emerald-50/30 text-emerald-900',
+                  };
+                  const bulletBadge = {
+                    error: '🔴 Error',
+                    warning: '⚠️ Warning',
+                    info: '💡 Inferred',
+                    success: '🟢 OK',
+                  };
+                  return (
+                    <div key={`quality-alert-${wIdx}`} className={`p-3.5 rounded-xl border flex gap-3 text-xs leading-normal transition-all hover:border-zinc-300 ${typeStyles[w.type]}`}>
+                      <div className="flex flex-col gap-1.5 w-full">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-extrabold text-[9px] uppercase tracking-wider">{bulletBadge[w.type]}</span>
+                          <span className="text-[9px] font-bold text-zinc-400 capitalize">{w.field} check</span>
+                        </div>
+                        <p className="font-black text-zinc-950 text-xs">{w.message}</p>
+                        <p className="text-[11px] text-zinc-500 font-medium leading-relaxed">{w.description}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            <div className="bg-zinc-50 rounded-xl p-3 border border-zinc-150 text-[10px] text-zinc-500 leading-relaxed font-medium">
+              <span className="font-bold text-zinc-700">💡 Platform Resolution Logic:</span> Missing city/countries are normalized, tenure durations are computed chronologically, and sectors/industries are auto-assigned using key phrase analysis from designations.
+            </div>
+          </div>
+
           {/* Enhanced Chronological Timeline */}
           <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -420,7 +495,7 @@ export default function AlumniCareerDashboard({ alumnus, analysis, isAnalyzing }
               <h4 className="text-base font-bold text-zinc-900">Career Statistics Dashboard</h4>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-4 gap-4">
               {/* Card 1 */}
               <div className="bg-white border border-zinc-200/80 rounded-2xl p-4.5 hover:shadow-sm transition-all flex flex-col justify-between">
                 <p className="text-[10px] font-extrabold uppercase tracking-widest text-zinc-400">Experience</p>
