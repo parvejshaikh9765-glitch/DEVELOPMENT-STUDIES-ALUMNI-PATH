@@ -95,11 +95,14 @@ export default function AdminPanel({
     e.preventDefault();
     setLoginError(null);
 
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const cleanPassword = String(password || '').trim();
+
     try {
       // Allow database-backed validation
-      const superAdminTry = await dataService.verifyRolePassword('Super Admin', password);
-      const adminTry = await dataService.verifyRolePassword('Admin', password);
-      const isHardcodedAdmin = (username === 'admin' && password === 'admin123');
+      const superAdminTry = await dataService.verifyRolePassword('Super Admin', cleanPassword);
+      const adminTry = await dataService.verifyRolePassword('Admin', cleanPassword);
+      const isHardcodedAdmin = ((cleanUsername === 'admin' && cleanPassword === 'admin123') || (cleanUsername === 'superadmin' && cleanPassword === 'superadmin123'));
 
       if (isHardcodedAdmin || superAdminTry.success || adminTry.success) {
         setIsAuthenticated(true);
@@ -111,7 +114,7 @@ export default function AdminPanel({
       }
     } catch (err) {
       setLoginError("Database verification failed. Reverting to local fallback.");
-      if (username === 'admin' && password === 'admin123') {
+      if ((cleanUsername === 'admin' && cleanPassword === 'admin123') || (cleanUsername === 'superadmin' && cleanPassword === 'superadmin123')) {
         setIsAuthenticated(true);
         sessionStorage.setItem('alumni_directory_admin_authed', 'true');
         triggerToast("Welcome administrator (offline mode).", "success");

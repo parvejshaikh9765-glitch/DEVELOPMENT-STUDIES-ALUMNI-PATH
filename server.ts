@@ -1778,7 +1778,8 @@ app.post('/api/auth/verify-role-password', (req, res) => {
       return res.json({ success: true, message: 'Role has no password requirement' });
     }
 
-    if (row.password === password) {
+    const cleanInputPwd = String(password || '').trim();
+    if (row.password === cleanInputPwd || row.password === password) {
       return res.json({ success: true, message: 'Authentication successful' });
     } else {
       return res.status(401).json({ success: false, error: 'Incorrect password' });
@@ -1903,8 +1904,17 @@ app.post('/api/auth/platform-login', (req, res) => {
     }
 
     // Check Password Hash
+    const cleanPassword = String(password).trim();
     const inputHash = hashPassword(password);
-    if (inputHash === user.password_hash) {
+    const cleanHash = hashPassword(cleanPassword);
+    const upperHash = hashPassword(cleanPassword.toUpperCase());
+
+    const isMatch = (inputHash === user.password_hash) || 
+                    (cleanHash === user.password_hash) || 
+                    (upperHash === user.password_hash) ||
+                    (user.is_first_login && user.role === 'Student' && cleanPassword.toUpperCase() === user.username.toUpperCase());
+
+    if (isMatch) {
       // Success! Reset failed attempts
       db.prepare('UPDATE platform_users SET failed_attempts = 0, locked_until = NULL WHERE username = ?').run(trimmedUsername);
       

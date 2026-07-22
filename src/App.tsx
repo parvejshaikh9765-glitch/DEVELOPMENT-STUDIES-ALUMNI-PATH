@@ -959,7 +959,10 @@ function AppLogin({ onSuccess, triggerToast }: AppLoginProps) {
     setIsLoading(true);
     setErrorMessage(null);
 
-    const res = await dataService.platformLogin(username.trim(), password);
+    const cleanUser = username.trim();
+    const cleanPwd = password.trim();
+
+    const res = await dataService.platformLogin(cleanUser, cleanPwd);
     setIsLoading(false);
     if (res.success && res.username && res.role && res.sessionId) {
       onSuccess({
