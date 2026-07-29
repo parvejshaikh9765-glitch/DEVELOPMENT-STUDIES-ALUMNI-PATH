@@ -446,6 +446,9 @@ export interface UploadedFile {
 }
 
 class DataService {
+  private readonly localAlumniStorageKey = 'alumni_directory_local_alumni_cache_v1';
+  private readonly localUploadsStorageKey = 'alumni_directory_local_uploads_cache_v1';
+
   private getHeaders(extra: Record<string, string> = {}): Record<string, string> {
     let role = 'Viewer';
     const savedUserStr = sessionStorage.getItem('platform_current_user');
@@ -467,6 +470,61 @@ class DataService {
     };
   }
 
+  private isJsonResponse(response: Response): boolean {
+    const contentType = response.headers.get('content-type') || '';
+    return contentType.toLowerCase().includes('application/json');
+  }
+
+  private loadLocalAlumni(): Alumni[] {
+    try {
+      const raw = localStorage.getItem(this.localAlumniStorageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private persistLocalAlumni(alumni: Alumni[]): void {
+    try {
+      localStorage.setItem(this.localAlumniStorageKey, JSON.stringify(alumni));
+    } catch {
+      // ignore storage write failures
+    }
+  }
+
+  private loadLocalUploads(): UploadedFile[] {
+    try {
+      const raw = localStorage.getItem(this.localUploadsStorageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private persistLocalUploads(files: UploadedFile[]): void {
+    try {
+      localStorage.setItem(this.localUploadsStorageKey, JSON.stringify(files));
+    } catch {
+      // ignore storage write failures
+    }
+  }
+
+  private getAlumniMergeKey(alumnus: Alumni): string {
+    const alumniId = String(alumnus.alumniId || '').trim().toLowerCase();
+    if (alumniId) return `alumniid:${alumniId}`;
+    const linkedin = String(alumnus.linkedinUrl || '').trim().toLowerCase();
+    if (linkedin && linkedin.includes('linkedin.com')) return `linkedin:${linkedin}`;
+    const email = String(alumnus.email || '').trim().toLowerCase();
+    if (email && !email.includes('@alumni.com') && !email.includes('@example.com')) return `email:${email}`;
+    const name = String(alumnus.name || '').trim().toLowerCase();
+    const batch = String(alumnus.batch || '').trim().toLowerCase();
+    return `namebatch:${name}|${batch}`;
+  }
+
   /**
    * Fetch all alumni from the SQLite backend
    */
@@ -475,13 +533,15 @@ class DataService {
       const response = await fetch('/api/alumni', {
         headers: this.getHeaders()
       });
-      if (!response.ok) {
-        throw new Error('Failed to fetch alumni');
+      if (response.ok && this.isJsonResponse(response)) {
+        const data = await response.json();
+        this.persistLocalAlumni(data);
+        return data;
       }
-      return await response.json();
+      return this.loadLocalAlumni();
     } catch (err) {
       console.error('DataService: getAlumni failed', err);
-      return [];
+      return this.loadLocalAlumni();
     }
   }
 
@@ -495,13 +555,18 @@ class DataService {
         headers: this.getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ alumni, fileName, fileId })
       });
-      if (!response.ok) {
+      if (!response.ok || !this.isJsonResponse(response)) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to save alumni');
+        this.persistLocalAlumni(alumni);
+        if (!response.ok) {
+          throw new Error(errData.error || 'Failed to save alumni');
+        }
+        return;
       }
+      this.persistLocalAlumni(alumni);
     } catch (err) {
       console.error('DataService: saveAlumni failed', err);
-      throw err;
+      this.persistLocalAlumni(alumni);
     }
   }
 
@@ -515,14 +580,48 @@ class DataService {
         headers: this.getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ alumni: newAlumni, fileName, fileId })
       });
+      if (response.ok && this.isJsonResponse(response)) {
+        const result = await response.json();
+        return result;
+      }
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to append alumni');
       }
-      return await response.json();
+      throw new Error('Backend API unavailable');
     } catch (err) {
-      console.error('DataService: appendAlumni failed', err);
-      throw err;
+      console.warn('DataService: appendAlumni API unavailable, applying local fallback:', err);
+      const existing = this.loadLocalAlumni();
+      const indexByKey = new Map<string, number>();
+      existing.forEach((alumnus, idx) => {
+        indexByKey.set(this.getAlumniMergeKey(alumnus), idx);
+      });
+
+      let added = 0;
+      let updated = 0;
+      for (const incoming of newAlumni) {
+        const key = this.getAlumniMergeKey(incoming);
+        const existingIndex = indexByKey.get(key);
+        if (existingIndex === undefined) {
+          existing.push(incoming);
+          indexByKey.set(key, existing.length - 1);
+          added++;
+          continue;
+        }
+
+        const prev = existing[existingIndex];
+        const nextSourceSheets = Array.from(new Set([...(prev.sourceSheets || []), fileName]));
+        existing[existingIndex] = {
+          ...prev,
+          ...incoming,
+          id: prev.id || incoming.id,
+          sourceSheets: nextSourceSheets
+        };
+        updated++;
+      }
+
+      this.persistLocalAlumni(existing);
+      return { success: true, added, updated, skipped: 0 };
     }
   }
 
@@ -613,13 +712,15 @@ class DataService {
       const response = await fetch('/api/uploaded-files', {
         headers: this.getHeaders()
       });
-      if (!response.ok) {
-        throw new Error('Failed to fetch files history');
+      if (response.ok && this.isJsonResponse(response)) {
+        const data = await response.json();
+        this.persistLocalUploads(data);
+        return data;
       }
-      return await response.json();
+      return this.loadLocalUploads();
     } catch (err) {
       console.error('DataService: getUploadHistory failed', err);
-      return [];
+      return this.loadLocalUploads();
     }
   }
 
@@ -633,13 +734,36 @@ class DataService {
         headers: this.getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(file)
       });
+      if (response.ok && this.isJsonResponse(response)) {
+        return;
+      }
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to add uploaded file record');
       }
+      throw new Error('Backend API unavailable');
     } catch (err) {
-      console.error('DataService: addUploadedFile failed', err);
-      throw err;
+      console.warn('DataService: addUploadedFile API unavailable, applying local fallback:', err);
+      const uploads = this.loadLocalUploads();
+      const uploadedAt = new Date().toISOString();
+      const normalized: UploadedFile = {
+        id: file.id,
+        file_name: file.file_name,
+        uploaded_at: (file as any).uploaded_at || file.uploadedAt || uploadedAt,
+        record_count: file.record_count,
+        status: file.status,
+        rawRows: file.rawRows,
+        columnMapping: file.columnMapping,
+        detected_batch: file.detected_batch,
+        rowHyperlinks: file.rowHyperlinks
+      };
+      const idx = uploads.findIndex(u => u.id === normalized.id);
+      if (idx === -1) {
+        uploads.unshift(normalized);
+      } else {
+        uploads[idx] = normalized;
+      }
+      this.persistLocalUploads(uploads);
     }
   }
 
@@ -1178,4 +1302,3 @@ class DataService {
 }
 
 export const dataService = new DataService();
-
