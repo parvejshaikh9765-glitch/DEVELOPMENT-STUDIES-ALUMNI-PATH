@@ -629,6 +629,8 @@ export default function UploadManager({ onClose, onCommit, triggerToast }: Uploa
     let addedTotal = 0;
     let updatedTotal = 0;
     let skippedTotal = 0;
+    let metadataWarnings = 0;
+    const failedMessages: string[] = [];
 
     const updatedQueue = [...queue];
 
@@ -640,24 +642,29 @@ export default function UploadManager({ onClose, onCommit, triggerToast }: Uploa
       setQueue([...updatedQueue]);
 
       try {
-        // 1. Register file upload meta in SQLite first to satisfy foreign key constraints
-        await dataService.addUploadedFile({
-          id: item.id,
-          file_name: item.file.name,
-          record_count: item.parsedAlumni.length,
-          status: 'processed',
-          rawRows: item.rows,
-          columnMapping: item.columnMapping,
-          detected_batch: item.detectedBatchHeading || '',
-          rowHyperlinks: item.rowHyperlinks
-        });
-
-        // 2. Send the structured list to the append API
+        // 1. Send the structured list to append API (or client fallback if backend API is unavailable)
         const appendResult = await dataService.appendAlumni(
           item.parsedAlumni, 
           item.file.name, 
           item.id
         );
+
+        // 2. Record file upload metadata (best-effort so upload isn't blocked by missing history route)
+        try {
+          await dataService.addUploadedFile({
+            id: item.id,
+            file_name: item.file.name,
+            record_count: item.parsedAlumni.length,
+            status: 'processed',
+            rawRows: item.rows,
+            columnMapping: item.columnMapping,
+            detected_batch: item.detectedBatchHeading || '',
+            rowHyperlinks: item.rowHyperlinks
+          });
+        } catch (metaErr: any) {
+          metadataWarnings++;
+          updatedQueue[idx].error = metaErr?.message || 'Imported, but failed to store upload history metadata.';
+        }
 
         updatedQueue[idx].status = 'completed';
         updatedQueue[idx].stats = {
@@ -674,6 +681,7 @@ export default function UploadManager({ onClose, onCommit, triggerToast }: Uploa
         console.error("Failed importing file", item.file.name, err);
         updatedQueue[idx].status = 'failed';
         updatedQueue[idx].error = err.message || 'Server ingestion failed';
+        failedMessages.push(`${item.file.name}: ${updatedQueue[idx].error}`);
       }
 
       setQueue([...updatedQueue]);
@@ -689,10 +697,39 @@ export default function UploadManager({ onClose, onCommit, triggerToast }: Uploa
       totalSkipped: skippedTotal
     });
 
-    triggerToast(`Ingested ${filesDone} class sheet(s) successfully!`, "success");
+    if (filesDone === 0) {
+      triggerToast(
+        failedMessages[0] || 'Import failed. The backend API may be unavailable. Start the server or retry in client fallback mode.',
+        "error"
+      );
+      return;
+    }
+
+    if (failedMessages.length > 0) {
+      triggerToast(
+        `Imported ${filesDone}/${pendingFiles.length} file(s). ${failedMessages.length} file(s) failed. First error: ${failedMessages[0]}`,
+        "info"
+      );
+    } else {
+      triggerToast(`Ingested ${filesDone} class sheet(s) successfully!`, "success");
+    }
+
+    if (metadataWarnings > 0) {
+      triggerToast(
+        `Imported data, but upload history could not be fully recorded for ${metadataWarnings} file(s).`,
+        "info"
+      );
+    }
 
     // Retrieve master list to update home view
     const masterAlumni = await dataService.getAlumni();
+    if (masterAlumni.length === 0 && (addedTotal > 0 || updatedTotal > 0)) {
+      triggerToast(
+        "Data was imported, but refreshing the alumni list failed. Please reload once backend sync is available.",
+        "error"
+      );
+      return;
+    }
     onCommit(masterAlumni, 'append', 'Multi-file Upload');
   };
 
@@ -755,8 +792,8 @@ export default function UploadManager({ onClose, onCommit, triggerToast }: Uploa
       const masterAlumni = await dataService.getAlumni();
       onCommit(masterAlumni, 'append', 'Direct Text Ingest');
       onClose();
-    } catch (e) {
-      triggerToast("Failed to save entries to the SQLite database.", "error");
+    } catch (e: any) {
+      triggerToast(e?.message || "Failed to save entries to the backend API.", "error");
     }
   };
 

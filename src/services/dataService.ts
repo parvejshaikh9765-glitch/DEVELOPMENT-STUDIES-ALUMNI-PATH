@@ -446,6 +446,182 @@ export interface UploadedFile {
 }
 
 class DataService {
+  private readonly fallbackAlumniKey = 'alumni_directory_fallback_alumni';
+  private readonly fallbackUploadHistoryKey = 'alumni_directory_fallback_uploaded_files';
+
+  private supportsLocalStorage(): boolean {
+    return typeof window !== 'undefined' && !!window.localStorage;
+  }
+
+  private shouldUseClientFallback(error: unknown): boolean {
+    if (error instanceof TypeError) return true;
+    const msg = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('http 404') ||
+      msg.includes('http 405') ||
+      msg.includes('route unavailable')
+    );
+  }
+
+  private readFallbackAlumni(): Alumni[] {
+    if (!this.supportsLocalStorage()) return [];
+    try {
+      const raw = localStorage.getItem(this.fallbackAlumniKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeFallbackAlumni(alumni: Alumni[]): void {
+    if (!this.supportsLocalStorage()) return;
+    try {
+      localStorage.setItem(this.fallbackAlumniKey, JSON.stringify(Array.isArray(alumni) ? alumni : []));
+    } catch {
+      // ignore fallback cache writes
+    }
+  }
+
+  private readFallbackUploadHistory(): UploadedFile[] {
+    if (!this.supportsLocalStorage()) return [];
+    try {
+      const raw = localStorage.getItem(this.fallbackUploadHistoryKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeFallbackUploadHistory(files: UploadedFile[]): void {
+    if (!this.supportsLocalStorage()) return;
+    try {
+      localStorage.setItem(this.fallbackUploadHistoryKey, JSON.stringify(Array.isArray(files) ? files : []));
+    } catch {
+      // ignore fallback cache writes
+    }
+  }
+
+  private pickBestFieldVal(incoming: any, existing: any): any {
+    if (incoming !== undefined && incoming !== null) {
+      const incomingStr = String(incoming).trim();
+      if (incomingStr !== '' && incomingStr !== 'N/A' && incomingStr !== 'Batch Not Available') {
+        return incoming;
+      }
+    }
+    return existing ?? '';
+  }
+
+  private mergeAlumniClientSide(
+    currentAlumni: Alumni[],
+    incomingList: Alumni[],
+    fileName: string,
+    fileId?: string
+  ): { merged: Alumni[]; added: number; updated: number; skipped: number } {
+    const mergedAlumni = [...currentAlumni];
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    const toNorm = (val: any) => String(val || '').trim().toLowerCase();
+    const isDummyEmail = (email: string) => email.includes('alumni.com') || email.includes('example.com');
+
+    for (const incoming of incomingList) {
+      const incomingName = toNorm(incoming.name);
+      if (!incomingName) {
+        skipped++;
+        continue;
+      }
+
+      const matchIdx = mergedAlumni.findIndex(existing => {
+        if (incoming.alumniId && existing.alumniId && toNorm(incoming.alumniId) === toNorm(existing.alumniId)) {
+          return true;
+        }
+        if (incoming.id && existing.id && !incoming.id.startsWith('imported-') && !existing.id.startsWith('imported-') && incoming.id === existing.id) {
+          return true;
+        }
+        if (incoming.linkedinUrl && existing.linkedinUrl && toNorm(incoming.linkedinUrl) === toNorm(existing.linkedinUrl)) {
+          return true;
+        }
+        if (incoming.email && existing.email) {
+          const e1 = toNorm(incoming.email);
+          const e2 = toNorm(existing.email);
+          if (e1 && e2 && e1 === e2 && !isDummyEmail(e1) && !isDummyEmail(e2)) {
+            return true;
+          }
+        }
+        const batch1 = String(incoming.batch || 'N/A').trim();
+        const batch2 = String(existing.batch || 'N/A').trim();
+        return incomingName === toNorm(existing.name) && batch1 === batch2 && batch1 !== 'N/A' && batch1 !== 'Batch Not Available';
+      });
+
+      if (matchIdx >= 0) {
+        const existing = mergedAlumni[matchIdx];
+        const mergedTrajectory = Array.from(new Set([...(existing.trajectory || []), ...(incoming.trajectory || [])].map(step => JSON.stringify(step)))).map(step => JSON.parse(step));
+        const mergedSkills = Array.from(new Set([...(existing.skills || []), ...(incoming.skills || [])])).filter(Boolean);
+        const mergedSourceSheets = Array.from(new Set([...(existing.sourceSheets || []), fileName || 'Unknown File'])).filter(Boolean);
+
+        mergedAlumni[matchIdx] = {
+          ...existing,
+          ...incoming,
+          name: this.pickBestFieldVal(incoming.name, existing.name),
+          batch: this.pickBestFieldVal(incoming.batch, existing.batch),
+          department: this.pickBestFieldVal(incoming.department, existing.department),
+          currentRole: this.pickBestFieldVal(incoming.currentRole, existing.currentRole),
+          currentCompany: this.pickBestFieldVal(incoming.currentCompany, existing.currentCompany),
+          location: this.pickBestFieldVal(incoming.location, existing.location),
+          email: this.pickBestFieldVal(incoming.email, existing.email),
+          linkedinUrl: this.pickBestFieldVal(incoming.linkedinUrl, existing.linkedinUrl),
+          avatarUrl: this.pickBestFieldVal(incoming.avatarUrl, existing.avatarUrl),
+          headline: this.pickBestFieldVal(incoming.headline, existing.headline),
+          phone: this.pickBestFieldVal(incoming.phone, existing.phone),
+          education: this.pickBestFieldVal(incoming.education, existing.education),
+          industry: this.pickBestFieldVal(incoming.industry, existing.industry),
+          experience: this.pickBestFieldVal(incoming.experience, existing.experience),
+          alumniId: this.pickBestFieldVal(incoming.alumniId, existing.alumniId),
+          imported_file_id: fileId || existing.imported_file_id,
+          trajectory: mergedTrajectory,
+          skills: mergedSkills,
+          sourceSheets: mergedSourceSheets
+        };
+        updated++;
+      } else {
+        mergedAlumni.push({
+          ...incoming,
+          id: incoming.id || `imported-${Math.random().toString(36).substr(2, 9)}`,
+          trajectory: incoming.trajectory || [],
+          skills: incoming.skills || [],
+          sourceSheets: [fileName || 'Unknown File'].filter(Boolean),
+          imported_file_id: fileId || null
+        });
+        added++;
+      }
+    }
+
+    return { merged: mergedAlumni, added, updated, skipped };
+  }
+
+  private appendAlumniClientFallback(
+    newAlumni: Alumni[],
+    fileName: string,
+    fileId?: string
+  ): { success: boolean; added: number; updated: number; skipped: number } {
+    const current = this.readFallbackAlumni();
+    const merged = this.mergeAlumniClientSide(current, newAlumni, fileName, fileId);
+    this.writeFallbackAlumni(merged.merged);
+    return {
+      success: true,
+      added: merged.added,
+      updated: merged.updated,
+      skipped: merged.skipped
+    };
+  }
+
   private getHeaders(extra: Record<string, string> = {}): Record<string, string> {
     let role = 'Viewer';
     const savedUserStr = sessionStorage.getItem('platform_current_user');
@@ -478,9 +654,15 @@ class DataService {
       if (!response.ok) {
         throw new Error('Failed to fetch alumni');
       }
-      return await response.json();
+      const alumni = await response.json();
+      this.writeFallbackAlumni(alumni);
+      return alumni;
     } catch (err) {
       console.error('DataService: getAlumni failed', err);
+      const fallbackAlumni = this.readFallbackAlumni();
+      if (fallbackAlumni.length > 0) {
+        return fallbackAlumni;
+      }
       return [];
     }
   }
@@ -499,6 +681,7 @@ class DataService {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to save alumni');
       }
+      this.writeFallbackAlumni(alumni);
     } catch (err) {
       console.error('DataService: saveAlumni failed', err);
       throw err;
@@ -516,12 +699,22 @@ class DataService {
         body: JSON.stringify({ alumni: newAlumni, fileName, fileId })
       });
       if (!response.ok) {
+        if (response.status === 404 || response.status === 405) {
+          throw new Error(`HTTP ${response.status}: upload append route unavailable`);
+        }
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to append alumni');
       }
-      return await response.json();
+      const result = await response.json();
+      const fallbackMerged = this.mergeAlumniClientSide(this.readFallbackAlumni(), newAlumni, fileName, fileId);
+      this.writeFallbackAlumni(fallbackMerged.merged);
+      return result;
     } catch (err) {
       console.error('DataService: appendAlumni failed', err);
+      if (this.shouldUseClientFallback(err)) {
+        console.warn('DataService: appendAlumni API unavailable, using client fallback import mode.');
+        return this.appendAlumniClientFallback(newAlumni, fileName, fileId);
+      }
       throw err;
     }
   }
@@ -614,12 +807,17 @@ class DataService {
         headers: this.getHeaders()
       });
       if (!response.ok) {
+        if (response.status === 404 || response.status === 405) {
+          throw new Error(`HTTP ${response.status}: upload history route unavailable`);
+        }
         throw new Error('Failed to fetch files history');
       }
-      return await response.json();
+      const files = await response.json();
+      this.writeFallbackUploadHistory(files);
+      return files;
     } catch (err) {
       console.error('DataService: getUploadHistory failed', err);
-      return [];
+      return this.readFallbackUploadHistory();
     }
   }
 
@@ -634,11 +832,32 @@ class DataService {
         body: JSON.stringify(file)
       });
       if (!response.ok) {
+        if (response.status === 404 || response.status === 405) {
+          throw new Error(`HTTP ${response.status}: upload history route unavailable`);
+        }
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to add uploaded file record');
       }
     } catch (err) {
       console.error('DataService: addUploadedFile failed', err);
+      if (this.shouldUseClientFallback(err)) {
+        const currentFiles = this.readFallbackUploadHistory();
+        const nextFile: UploadedFile = {
+          id: file.id,
+          file_name: file.file_name,
+          uploaded_at: file.uploadedAt || new Date().toISOString(),
+          record_count: file.record_count,
+          status: file.status,
+          rawRows: file.rawRows || [],
+          columnMapping: file.columnMapping || {},
+          detected_batch: file.detected_batch || '',
+          rowHyperlinks: file.rowHyperlinks || []
+        };
+        const filtered = currentFiles.filter(f => f.id !== nextFile.id);
+        filtered.unshift(nextFile);
+        this.writeFallbackUploadHistory(filtered);
+        return;
+      }
       throw err;
     }
   }
@@ -1178,4 +1397,3 @@ class DataService {
 }
 
 export const dataService = new DataService();
-
