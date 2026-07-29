@@ -529,7 +529,12 @@ class DataService {
     let skipped = 0;
 
     const toNorm = (val: any) => String(val || '').trim().toLowerCase();
-    const isDummyEmail = (email: string) => email.includes('alumni.com') || email.includes('example.com');
+    const isDummyEmail = (email: string) => {
+      const parts = String(email || '').trim().toLowerCase().split('@');
+      if (parts.length !== 2) return false;
+      const domain = parts[1];
+      return domain === 'alumni.com' || domain === 'example.com';
+    };
 
     for (const incoming of incomingList) {
       const incomingName = toNorm(incoming.name);
